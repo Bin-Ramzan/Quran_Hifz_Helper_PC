@@ -1,0 +1,1489 @@
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:quran_memorization_helper/models/routing.dart';
+import 'dart:convert';
+import 'dart:typed_data';
+import 'dart:async';
+import 'package:quran_memorization_helper/models/settings.dart';
+import 'package:quran_memorization_helper/models/ayat.dart';
+import 'package:quran_memorization_helper/quran_data/pages.dart';
+import 'package:quran_memorization_helper/quran_data/quran_text.dart';
+import 'package:quran_memorization_helper/quran_data/salasa_nisf_ruba_data.dart';
+import 'package:quran_memorization_helper/quran_data/surahs.dart';
+import 'package:quran_memorization_helper/quran_data/para_bounds.dart';
+import 'package:quran_memorization_helper/quran_data/ayat.dart';
+import 'package:quran_memorization_helper/quran_data/rukus.dart';
+import 'package:quran_memorization_helper/quran_data/sixteen_line_indopak_layout.dart';
+import 'package:quran_memorization_helper/quran_data/fifteen_line_uthmani_layout.dart';
+import 'package:quran_memorization_helper/quran_data/fifteen_line_indopak_layout.dart';
+import 'package:quran_memorization_helper/quran_data/thirteen_line_indopak_layout.dart';
+import 'package:quran_memorization_helper/quran_data/page_layout_types.dart'
+    as layout;
+import 'package:quran_memorization_helper/utils/utils.dart';
+import 'package:quran_memorization_helper/widgets/mutashabiha_ayat_list_item.dart';
+import 'package:quran_memorization_helper/widgets/tap_and_longpress_gesture_recognizer.dart';
+import 'package:quran_memorization_helper/pages/page_constants.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter/gestures.dart';
+import 'dart:math';
+
+final _markedWordStyleLight = TextStyle(
+  inherit: true,
+  backgroundColor: Colors.red.shade100,
+  color: Colors.red,
+);
+final _markedWordStyleDark = TextStyle(
+  inherit: true,
+  backgroundColor: Colors.red.withAlpha(80),
+  color: Colors.red,
+);
+
+TextStyle _markedWordStyle(bool dark) {
+  if (dark) {
+    return _markedWordStyleDark;
+  }
+  return _markedWordStyleLight;
+}
+
+final _markedAyahBGStyleLight = TextStyle(
+  inherit: true,
+  backgroundColor: Colors.red.shade100,
+);
+final _markedAyahBGStyleDark = TextStyle(
+  inherit: true,
+  backgroundColor: Colors.red.withAlpha(80),
+);
+
+TextStyle _markedAyahBGStyle(bool dark) {
+  if (dark) {
+    return _markedAyahBGStyleDark;
+  }
+  return _markedAyahBGStyleLight;
+}
+
+final _markedMutAyahBGStyleLight = TextStyle(
+  inherit: true,
+  color: Colors.indigo,
+  backgroundColor: Colors.red.shade100,
+);
+final _markedMutAyahBGStyleDark = _markedMutAyahBGStyleLight.copyWith(
+  color: Colors.indigo.shade200,
+  backgroundColor: Colors.red.withAlpha(80),
+);
+TextStyle _markedMutAyahBGStyle(bool dark) {
+  if (dark) {
+    return _markedMutAyahBGStyleDark;
+  }
+  return _markedMutAyahBGStyleLight;
+}
+
+const TextStyle _mutStyleLight = TextStyle(inherit: true, color: Colors.indigo);
+TextStyle _mutStyle(bool dark) {
+  if (dark) {
+    return _mutStyleLight.copyWith(color: Colors.indigo.shade200);
+  }
+  return _mutStyleLight;
+}
+
+TextStyle _highlightStyle(bool dark) {
+  final TextStyle _highlihtStyleLight = TextStyle(
+    inherit: true,
+    backgroundColor: Colors.yellow.shade300,
+  );
+
+  if (dark) {
+    return _highlihtStyleLight.copyWith(
+      backgroundColor: Colors.yellow.withAlpha(80),
+    );
+  }
+  return _highlihtStyleLight;
+}
+
+double _availableHeight(BuildContext context) {
+  // top,bottom padding, will include notch and stuff
+  final mqPadding = MediaQuery.paddingOf(context);
+  final viewPadding = View.of(context).viewPadding;
+  final dpr = MediaQuery.devicePixelRatioOf(context);
+  final double top = (viewPadding.top / dpr) + mqPadding.top;
+  final double bottom = (viewPadding.bottom / dpr) + mqPadding.bottom;
+
+  final dualPage = Settings.instance.temporaryState.dualPage;
+
+  final appBarHeight = dualPage ? 0 : kToolbarHeight;
+  final padding = top + bottom + appBarHeight;
+
+  // dont go below 200, we will scroll if below
+  return max(200, MediaQuery.sizeOf(context).height - (padding));
+}
+
+double _heightMultiplier() {
+  if (!Settings.instance.reflowMode) return 1.0;
+
+  final fontSize = Settings.instance.fontSize;
+  return switch (fontSize) {
+    24 => 1.0,
+    28 => 1.2,
+    30 => 1.4,
+    32 => 1.6,
+    34 => 1.8,
+    36 => 2.0,
+    38 => 2.2,
+    _ => throw "unsupported font size $fontSize",
+  };
+}
+
+class Translation {
+  /// The filename of translation
+  final String fileName;
+
+  /// The translation buffer
+  final ByteBuffer transUtf8;
+
+  /// The line offsets into the buffer
+  final List<int> transLineOffsets;
+
+  /// Is this translation the builtin one?
+  final bool isBundledTranslation;
+
+  bool get isUrdu => isBundledTranslation || fileName.startsWith("ur.");
+
+  Translation({
+    required this.fileName,
+    required this.transUtf8,
+    required this.transLineOffsets,
+    required this.isBundledTranslation,
+  });
+}
+
+class TranslationTile extends StatefulWidget {
+  final String translation;
+  final bool isUrduTranslation;
+  final bool hasNoMutashabihat;
+  final int ayahIndex;
+
+  const TranslationTile(
+    this.translation,
+    this.isUrduTranslation, {
+    required this.hasNoMutashabihat,
+    required this.ayahIndex,
+    super.key,
+  });
+
+  @override
+  State<StatefulWidget> createState() => _TranslationTileState();
+}
+
+class _TranslationTileState extends State<TranslationTile> {
+  @override
+  Widget build(BuildContext context) {
+    final children = [
+      Text(
+        widget.translation.trim(),
+        textDirection: widget.isUrduTranslation ? TextDirection.rtl : null,
+        style:
+            widget.isUrduTranslation
+                ? const TextStyle(
+                  fontFamily: "Urdu",
+                  fontSize: 22,
+                  letterSpacing: 0.0,
+                  height: 1.8,
+                )
+                : null,
+      ),
+    ];
+
+    if (widget.hasNoMutashabihat) {
+      return ListTile(
+        title: Column(
+          children: [...children, const Divider(indent: 10, endIndent: 10)],
+        ),
+        subtitle: Text(
+          QuranText.instance.spaceSplittedAyahText(widget.ayahIndex),
+          textDirection: TextDirection.rtl,
+          style: TextStyle(
+            fontFamily: getQuranFont(),
+            fontSize: 22,
+            wordSpacing: 1,
+            letterSpacing: 0,
+          ),
+        ),
+      );
+    }
+
+    return ExpansionTile(
+      title: const Text("Translation"),
+      childrenPadding: EdgeInsets.only(left: 8, right: 8),
+      children: children,
+    );
+  }
+}
+
+class LongPressActionSheet extends StatefulWidget {
+  final Widget? mutashabihaList;
+  final Translation translation;
+
+  /// absoluteAyah index of tapped ayah
+  final int tappedAyahIdx;
+
+  const LongPressActionSheet({
+    super.key,
+    required this.mutashabihaList,
+    required this.translation,
+    required this.tappedAyahIdx,
+  });
+
+  @override
+  State<StatefulWidget> createState() => _LongPressActionSheetState();
+}
+
+class _LongPressActionSheetState extends State<LongPressActionSheet> {
+  late PageController _controller;
+
+  @override
+  void initState() {
+    int currentAyah = widget.tappedAyahIdx;
+    _controller = PageController(initialPage: currentAyah);
+
+    super.initState();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  String surahAyahText(int ayahIdx) {
+    int surah = surahForAyah(ayahIdx);
+    int ayah = toSurahAyahOffset(surah, ayahIdx);
+    return "${surahNameForIdx(surah)}:${ayah + 1}";
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PageView.builder(
+      reverse: true,
+      itemCount: QuranText.instance.ayahCount(),
+      controller: _controller,
+      itemBuilder: (context, index) {
+        final int ayah = index;
+        final int s = widget.translation.transLineOffsets[ayah];
+        final int e = widget.translation.transLineOffsets[ayah + 1];
+        String translation = utf8.decode(
+          widget.translation.transUtf8.asUint8List(s, e - s),
+        );
+        String metadata = surahAyahText(ayah);
+        final int surahIdx = surahForAyah(ayah);
+        final int surahAyahIdx = toSurahAyahOffset(surahIdx, ayah);
+
+        // if mutashabiha is null, we always show translation
+        bool dontShowMutashabih =
+            (widget.mutashabihaList == null) ||
+            // else if user has swiped, then we expand
+            (widget.mutashabihaList != null && widget.tappedAyahIdx != ayah);
+        final translationWidget = TranslationTile(
+          translation,
+          widget.translation.isUrdu,
+          ayahIndex: ayah,
+          hasNoMutashabihat: dontShowMutashabih,
+        );
+
+        final openOnQuranCom = TextButton.icon(
+          onPressed: () {
+            launchUrl(
+              Uri.parse(
+                "https://quran.com/${surahIdx + 1}:${surahAyahIdx + 1}",
+              ),
+            );
+          },
+          icon: const Icon(Icons.open_in_new),
+          label: Text("$metadata on Quran.com"),
+        );
+
+        const animDuration = Duration(milliseconds: 150);
+        const curve = Curves.easeIn;
+        final nextPageButton = FilledButton(
+          child: const Icon(Icons.arrow_back),
+          onPressed: () {
+            _controller.nextPage(duration: animDuration, curve: curve);
+          },
+        );
+        final prevPageButton = FilledButton(
+          child: const Icon(Icons.arrow_forward),
+          onPressed: () {
+            _controller.previousPage(duration: animDuration, curve: curve);
+          },
+        );
+
+        List<Widget> listChildren;
+
+        if (widget.tappedAyahIdx == ayah && widget.mutashabihaList != null) {
+          listChildren = [
+            openOnQuranCom,
+            translationWidget,
+            const Divider(),
+            widget.mutashabihaList!,
+          ];
+        } else {
+          listChildren = [openOnQuranCom, translationWidget];
+        }
+
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Expanded(child: ListView(children: listChildren)),
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Row(
+                children: [nextPageButton, const Spacer(), prevPageButton],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class LineAyah {
+  final int ayahIndex;
+  final String text;
+  const LineAyah(this.ayahIndex, this.text);
+}
+
+class Line {
+  final List<LineAyah> lineAyahs;
+  const Line(this.lineAyahs);
+}
+
+class Page {
+  final int pageNum;
+  final List<Line> lines;
+  const Page(this.pageNum, this.lines);
+}
+
+class ReadQuranWidget extends StatefulWidget {
+  final ParaAyatModel model;
+  final PageController pageController;
+  final VoidCallback verticalScrollResetFn;
+  final Function(int) pageChangedCallback;
+  final Orientation orientation;
+  final List<int> ayahsToHighlight;
+
+  const ReadQuranWidget(
+    this.model, {
+    required this.pageController,
+    super.key,
+    required this.verticalScrollResetFn,
+    required this.pageChangedCallback,
+    required this.orientation,
+    this.ayahsToHighlight = const [],
+  });
+
+  @override
+  State<StatefulWidget> createState() => _ReadQuranWidget();
+}
+
+class _ReadQuranWidget extends State<ReadQuranWidget>
+    with SingleTickerProviderStateMixin {
+  List<layout.Page> _pages = [];
+  List<(int, int)> _dualPages = [];
+  List<Mutashabiha> _mutashabihat = [];
+  Translation? _translation;
+  final _repaintNotifier = StreamController<int>.broadcast();
+
+  @override
+  void initState() {
+    widget.model.addListener(onModelChanged);
+    Settings.instance.addListener(clearCachedTranslation);
+    // WidgetsBinding.instance.addPostFrameCallback((_) {
+    //   Future.delayed(const Duration(milliseconds: 100), () {
+    //     _fwdPgs();
+    //   });
+    // });
+    super.initState();
+    WakelockPlus.enable(); // disable auto screen turn off
+  }
+
+  /* Test code to scroll through all pages */
+  // void _fwdPgs() {
+  //   if (widget.pageController.positions.isEmpty) {
+  //     Future.delayed(const Duration(milliseconds: 10), () {
+  //       _fwdPgs();
+  //     });
+  //     return;
+  //   }
+  //
+  //   if (widget.pageController.page == null) {
+  //     return;
+  //   }
+  //   if (widget.pageController.page!.toInt() + 1 < _pages.length) {
+  //     widget.pageController.jumpToPage(widget.pageController.page!.toInt() + 1);
+  //     Future.delayed(const Duration(milliseconds: 30), () {
+  //       // print("Next! ${widget.pageController.page!.toInt()} ${_pages.length}");
+  //       _fwdPgs();
+  //     });
+  //   }
+  // }
+
+  @override
+  void dispose() {
+    widget.model.removeListener(onModelChanged);
+    Settings.instance.removeListener(clearCachedTranslation);
+    super.dispose();
+    WakelockPlus.disable();
+  }
+
+  void clearCachedTranslation() {
+    // rebuild as reflow mode or other setting might have changed
+    setState(() {
+      _translation = null;
+    });
+  }
+
+  void onModelChanged() {
+    _repaintNotifier.add(0);
+  }
+
+  List<layout.Page> _getPageLayoutList() {
+    return switch (Settings.instance.mushaf) {
+      Mushaf.Indopak16Line => pages16Indopak,
+      Mushaf.Uthmani15Line => pages15Uthmani,
+      Mushaf.Indopak15Line => pages15Indopak,
+      Mushaf.Indopak13Line => pages13Indopak,
+    };
+  }
+
+  Future<Object> doload() async {
+    // we lazy load the mutashabiha ayat text
+    _pages = _getPageLayoutList();
+    _mutashabihat = await importAllMutashabihat();
+
+    _dualPages = [];
+    if (Settings.instance.temporaryState.dualPage) {
+      int i = 0;
+      for (; i + 2 < _pages.length; i += 2) {
+        _dualPages.add((i + 1, i));
+      }
+
+      if (i < _pages.length) {
+        _dualPages.add((i + 1, i));
+      }
+      return _dualPages;
+    }
+
+    return _pages;
+  }
+
+  bool _isMutashabihaAyat(int surahAyahIdx, int surahIdx) {
+    // _mutashabihat is sorted
+    final it = _mutashabihat
+        .skipWhile((m) => m.src.surahIdx < surahIdx)
+        .takeWhile(
+          (m) =>
+              m.src.surahIdx == surahIdx &&
+              m.src.surahAyahIndexes.first <= surahAyahIdx,
+        );
+    for (final m in it) {
+      if (m.src.surahAyahIndexes.contains(surahAyahIdx)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  List<Mutashabiha> _getMutashabihaAyat(int surahAyahIdx, int surahIdx) {
+    List<Mutashabiha> ret = [];
+    for (final m in _mutashabihat) {
+      if (m.src.surahIdx == surahIdx &&
+          m.src.surahAyahIndexes.contains(surahAyahIdx)) {
+        ret.add(m);
+      }
+    }
+    return ret;
+  }
+
+  Ayat? _getAyatInDB(int ayahIdx) {
+    return widget.model.getAyahInDB(ayahIdx);
+  }
+
+  static Future<Translation> _loadTranslation() async {
+    ByteBuffer transUtf8;
+    final isBundledTranslation = Settings.instance.translationFile.isEmpty;
+    if (isBundledTranslation) {
+      transUtf8 = (await rootBundle.load("assets/ur.junagarhi.txt")).buffer;
+    } else {
+      final data = File(Settings.instance.translationFile).readAsBytesSync();
+      transUtf8 = data.buffer;
+    }
+
+    List<int> transLineOffsets = [];
+    transLineOffsets.add(0);
+    int start = 0;
+    final utf = transUtf8.asUint8List();
+    int next = utf.indexOf(10);
+    while (next != -1) {
+      transLineOffsets.add(next);
+
+      start = next + 1;
+      next = utf.indexOf(10, start);
+    }
+
+    return Translation(
+      fileName: Settings.instance.translationFile,
+      transUtf8: transUtf8,
+      transLineOffsets: transLineOffsets,
+      isBundledTranslation: isBundledTranslation,
+    );
+  }
+
+  void _onAyahLongPressed(int ayahIdx) async {
+    int surahIdx = surahForAyah(ayahIdx);
+    int surahAyah = toSurahAyahOffset(surahIdx, ayahIdx);
+    List<Mutashabiha> mutashabihat = _getMutashabihaAyat(surahAyah, surahIdx);
+
+    _translation ??= await _loadTranslation();
+
+    for (int i = 0; i < mutashabihat.length; ++i) {
+      mutashabihat[i].loadText();
+    }
+
+    Widget? mutashabihaWidget;
+    if (mutashabihat.isNotEmpty) {
+      mutashabihaWidget = ListView.separated(
+        physics: const NeverScrollableScrollPhysics(),
+        shrinkWrap: true,
+        separatorBuilder: (ctx, index) => const Divider(height: 1),
+        itemCount: mutashabihat.length,
+        itemBuilder: (ctx, index) {
+          return MutashabihaAyatListItem(
+            mutashabiha: mutashabihat[index],
+            onGotoMutashabiha: (int ayah) {
+              final page = getPageForAyah(ayah, Settings.instance.mushaf);
+              Navigator.of(context).pushNamed(
+                goToPageModal,
+                arguments: ReadOnlyQuranPageArgs(widget.model, page),
+              );
+            },
+          );
+        },
+      );
+    }
+
+    if (!mounted) return;
+
+    return await showModalBottomSheet(
+      context: context,
+      scrollControlDisabledMaxHeightRatio:
+          Settings.instance.temporaryState.dualPage ? 0.8 : 0.6,
+      builder: (context) {
+        return SizedBox(
+          width: MediaQuery.sizeOf(context).width,
+          child: Padding(
+            padding: const EdgeInsets.only(top: 8.0, bottom: 8.0),
+            child: LongPressActionSheet(
+              mutashabihaList: mutashabihaWidget,
+              translation: _translation!,
+              tappedAyahIdx: ayahIdx,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _onAyahTapped(int ayahIdx, int wordIdx, bool longPress) async {
+    bool tapToShowBottomSheet = Settings.instance.tapToShowTranslation;
+    if ((longPress && !tapToShowBottomSheet) ||
+        (!longPress && tapToShowBottomSheet)) {
+      _onAyahLongPressed(ayahIdx);
+      return;
+    }
+
+    Ayat? ayatInDb = _getAyatInDB(ayahIdx);
+    // otherwise we add/remove ayah
+    if (ayatInDb != null && ayatInDb.markedWords.contains(wordIdx)) {
+      // remove
+      widget.model.removeMarkedWordInAyat(ayahIdx, wordIdx);
+    } else {
+      // add
+      Ayat ayat = Ayat("", [wordIdx], ayahIdx: ayahIdx);
+      widget.model.addAyahs([ayat]);
+    }
+  }
+
+  static List<Line> _linesForPage(List<layout.Page> pages, int pageIndex) {
+    final page = pages[pageIndex];
+    final List<Line> pageLines = List.filled(
+      page.lines.length,
+      Line(const []),
+      growable: false,
+    );
+    int currentLine = 0;
+
+    for (
+      int lineIdx = 0;
+      lineIdx < page.lines.length;
+      ++lineIdx, ++currentLine
+    ) {
+      final l = page.lines[lineIdx];
+      final ayah = l.ayahIdx;
+      final start = l.wordStartInAyahIdx;
+
+      if (ayah < 0) {
+        pageLines[currentLine] = Line([
+          LineAyah(start == -999 ? start : start - 1, ""),
+        ]);
+        continue;
+      }
+
+      int? nextAyah;
+      int? nextAyahStart;
+      if (lineIdx + 1 < page.lines.length) {
+        if (page.lines[lineIdx + 1].ayahIdx >= 0) {
+          final nextLine = page.lines[lineIdx + 1];
+          nextAyah = nextLine.ayahIdx;
+          nextAyahStart = nextLine.wordStartInAyahIdx;
+        } else {
+          // find next valid ayah
+          for (int j = lineIdx + 1; j < page.lines.length; ++j) {
+            if (page.lines[j].ayahIdx >= 0) {
+              nextAyah = page.lines[j].ayahIdx;
+              nextAyahStart = 0;
+              break;
+            } else if (page.lines[j].ayahIdx < 0) {
+              // we are at the end of surah. Check if there are any ayahs left
+              int surah = surahForAyah(ayah);
+              assert(surah >= 0);
+              int surahAyah = toSurahAyahOffset(surah, ayah);
+              final surahData = surahDataForIdx(surah);
+              if (surahAyah + 1 < surahData.ayahCount) {
+                // go to the end of surah
+                nextAyah = toAbsoluteAyahOffset(surah, surahData.ayahCount);
+                nextAyahStart = 0;
+              }
+            }
+          }
+        }
+      } else if (pageIndex + 1 < pages.length) {
+        final nextPage = pages[pageIndex + 1];
+        if (nextPage.lines.first.ayahIdx >= 0) {
+          final nextPageFirstLine = nextPage.lines.first;
+          nextAyah = nextPageFirstLine.ayahIdx;
+          nextAyahStart = nextPageFirstLine.wordStartInAyahIdx;
+        } else {
+          // find next valid ayah
+          for (int j = 0; j < nextPage.lines.length; ++j) {
+            if (nextPage.lines[j].ayahIdx >= 0) {
+              nextAyah = nextPage.lines[j].ayahIdx;
+              nextAyahStart = 0;
+              break;
+            }
+          }
+        }
+      }
+      // last page, second last ayah
+      else if (pageIndex + 1 == pages.length &&
+          ayah == 6234 &&
+          lineIdx + 1 >= page.lines.length) {
+        // Do a +1 so that it adds the whole last ayah
+        // ayahsForRanges adds all ayahs (ayah, nextAyah]
+        // and for the nextAyah it adds upto nextAyahStart
+        nextAyah = 6235 + 1;
+        nextAyahStart = 0;
+      }
+
+      final ayahsForRanges = QuranText.instance.ayahsForRanges(
+        ayah,
+        start,
+        nextAyah,
+        nextAyahStart,
+      );
+      List<LineAyah> lineAyahs = ayahsForRanges
+          .map((a) => LineAyah(a.$1, a.$2))
+          .toList(growable: false);
+      pageLines[currentLine] = Line(lineAyahs);
+    }
+    return pageLines;
+  }
+
+  Widget _getPageWidget(int index) {
+    if (index >= _pages.length || index < 0) {
+      return const SizedBox.shrink();
+    }
+
+    List<int>? ayahsToHighlight;
+    if (widget.ayahsToHighlight.isNotEmpty) {
+      ayahsToHighlight =
+          _pages[index].lines
+              .where((line) => widget.ayahsToHighlight.contains(line.ayahIdx))
+              .map((line) => line.ayahIdx)
+              .toList();
+    }
+
+    return PageWidget(
+      index,
+      _pages[index].pageNum,
+      _linesForPage(_pages, index),
+      getAyatInDB: _getAyatInDB,
+      onAyahTapped: _onAyahTapped,
+      isMutashabihaAyat: _isMutashabihaAyat,
+      repaintStream: _repaintNotifier.stream,
+      isBookmarked: () => widget.model.bookmarks.contains(index),
+      onToggleBookmark: () {
+        if (widget.model.bookmarks.contains(index)) {
+          widget.model.removeBookmark(index);
+        } else {
+          widget.model.addBookmark(index);
+        }
+      },
+      ayahsToHighlight: ayahsToHighlight,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // set to true when swiping to load next para
+    return FutureBuilder(
+      future: doload(),
+      builder: (context, snapshot) {
+        if (_pages.isEmpty ||
+            snapshot.connectionState != ConnectionState.done) {
+          return SizedBox.shrink();
+        }
+        final bool isDualPage = snapshot.data is List<(int, int)>;
+
+        return SizedBox(
+          height: _availableHeight(context) * _heightMultiplier(),
+          child: NotificationListener<OverscrollNotification>(
+            onNotification: (noti) {
+              if (noti.depth == 0) {
+                int dir = noti.overscroll >= 0 ? 1 : -1;
+                bool lastpage = dir < 0;
+                if (lastpage) {
+                  widget.pageController.jumpToPage(_pages.length - 1);
+                } else {
+                  widget.pageController.jumpToPage(0);
+                }
+              }
+              return false;
+            },
+            child: PageView.builder(
+              onPageChanged: (newPage) {
+                // reset vertical scroll only if in reflow mode
+                // because otherwise its annoying as we usually
+                // have vertical scroll of 1 line and the user
+                // keeps scrolling that 1 line again and again
+                if (Settings.instance.reflowMode) {
+                  widget.verticalScrollResetFn();
+                }
+                widget.pageChangedCallback(newPage);
+              },
+              controller: widget.pageController,
+              reverse: true,
+              itemCount: isDualPage ? _dualPages.length : _pages.length,
+              scrollBehavior:
+                  const ScrollBehavior()..copyWith(overscroll: false),
+              itemBuilder: (ctx, index) {
+                if (isDualPage) {
+                  final (first, second) = _dualPages[index];
+                  return SizedBox(
+                    width: MediaQuery.widthOf(context),
+                    child: Row(
+                      children: [
+                        Expanded(child: _getPageWidget(first)),
+                        Expanded(child: _getPageWidget(second)),
+                      ],
+                    ),
+                  );
+                } else {
+                  return ExcludeSemantics(child: _getPageWidget(index));
+                }
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class PageWidget extends StatefulWidget {
+  final int pageIndex;
+  final int pageNumber;
+  final List<Line> _pageLines;
+  final bool Function(int ayahIdx, int surahIdx) isMutashabihaAyat;
+  final Ayat? Function(int ayahIdx) getAyatInDB;
+  final void Function(int ayahIdx, int wordIdx, bool longPress) onAyahTapped;
+  final Stream<int> repaintStream;
+  final bool Function() isBookmarked;
+  final void Function() onToggleBookmark;
+  final List<int>? ayahsToHighlight;
+
+  const PageWidget(
+    this.pageIndex,
+    this.pageNumber,
+    this._pageLines, {
+    required this.isMutashabihaAyat,
+    required this.getAyatInDB,
+    required this.onAyahTapped,
+    required this.repaintStream,
+    required this.isBookmarked,
+    required this.onToggleBookmark,
+    required this.ayahsToHighlight,
+    super.key,
+  });
+
+  @override
+  State<StatefulWidget> createState() => _PageWidgetState();
+}
+
+class _PageWidgetState extends State<PageWidget> {
+  StreamSubscription<int>? _subscription;
+
+  // These variables are used to optimize ayah portion lookup in the
+  // full ayah text
+  int _lastAyahIdx = -1;
+  int _lastRenderedWordIdx = -1;
+
+  @override
+  void initState() {
+    super.initState();
+    _subscription = widget.repaintStream.listen(_triggerRepaint);
+  }
+
+  void _triggerRepaint(v) {
+    setState(() {});
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
+    _subscription?.cancel();
+  }
+
+  Widget _getBism(TextStyle style, double rowHeight) {
+    return Container(
+      height: rowHeight,
+      width: MediaQuery.sizeOf(context).width,
+      decoration: BoxDecoration(
+        color: Colors.green.withValues(alpha: 0.4),
+        border: Border.all(color: Theme.of(context).dividerColor, width: 1),
+      ),
+      child: Text(
+        String.fromCharCode(0xFDFD),
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.rtl,
+        style: style.copyWith(
+          fontFamily: "Bismillah",
+          fontSize: Theme.of(context).textTheme.headlineLarge?.fontSize,
+        ),
+      ),
+    );
+  }
+
+  Widget _getSurahHeaddress(
+    int surahIdx,
+    TextStyle style,
+    double rowHeight, {
+    bool includeBismillah = false,
+  }) {
+    SurahData surahData = surahDataForIdx(surahIdx, arabic: true);
+    final isSurahTawba = surahIdx == 8;
+    return Container(
+      padding: const EdgeInsets.only(left: 2, right: 2),
+      height: rowHeight,
+      decoration: BoxDecoration(
+        color: Colors.green.withValues(alpha: 0.4),
+        border: Border.all(color: Theme.of(context).dividerColor, width: 1),
+      ),
+      child: Row(
+        children: [
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              " ${toArabicNumber(surahData.ayahCount)}",
+              textDirection: TextDirection.rtl,
+              textAlign: TextAlign.center,
+              style: style.copyWith(fontFamily: "Urdu"),
+            ),
+          ),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              "آياتها",
+              textDirection: TextDirection.rtl,
+              textAlign: TextAlign.center,
+              style: style.copyWith(fontFamily: "Al Mushaf"),
+            ),
+          ),
+          if (includeBismillah && !isSurahTawba) const Spacer(),
+          if (includeBismillah && !isSurahTawba)
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                isSurahTawba ? "-" : String.fromCharCode(0xFDFD),
+                textDirection: TextDirection.rtl,
+                style: style.copyWith(
+                  fontFamily: "Bismillah",
+                  fontSize: Theme.of(context).textTheme.headlineLarge?.fontSize,
+                ),
+              ),
+            ),
+          const Spacer(),
+          FittedBox(
+            fit: BoxFit.contain,
+            child: Text(
+              String.fromCharCodes([surahGlyphCode(surahIdx), 0xe903]),
+              textDirection: TextDirection.rtl,
+              style: style.copyWith(fontFamily: "SurahNames"),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _onRukuTapped(int ayahIndex) async {
+    final rukuData = getRukuData(ayahIndex)!;
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return SimpleDialog(
+          title: const Text("Ruku"),
+          children: [
+            ListTile(title: Text("Para Ruku No: ${rukuData.paraRuku + 1}")),
+            ListTile(title: Text("Surah Ruku No: ${rukuData.surahRuku + 1}")),
+          ],
+        );
+      },
+    );
+  }
+
+  // Finds the correct position of the first word of the line
+  // in the full ayah text
+  static int getFirstWordIndex(
+    String fullAyah,
+    String currentLine,
+    int startSearchAt,
+  ) {
+    // Find the position of currentLine in full Ayah
+    int match = fullAyah.indexOf(currentLine, startSearchAt);
+    if (match == -1) {
+      throw "Didn't find anything, bug!\n$currentLine\n$fullAyah";
+    }
+
+    // Find the index of first word
+    int s = fullAyah.indexOf("\u200c");
+    int wordIndex = 0;
+    while (true) {
+      if (s >= match) break;
+      s = fullAyah.indexOf("\u200c", s + 1);
+      wordIndex++;
+    }
+    return wordIndex;
+  }
+
+  List<TextSpan> _buildLineSpans(
+    Line line,
+    int lineIdx,
+    List<(int ayahIndex, int, int, Ayat?, bool, String)> ayahData,
+    ThemeData themeData, {
+    required bool reflowMode,
+  }) {
+    List<TextSpan> spans = [];
+    final isIndoPk = isIndoPak(Settings.instance.mushaf);
+    bool darkMode = themeData.brightness == Brightness.dark;
+
+    for (final a in line.lineAyahs) {
+      final (
+        _,
+        int surahIdx,
+        int surahAyahIdx,
+        Ayat? ayahInDb,
+        bool isMutashabihaAyat,
+        String fullAyahText,
+      ) = ayahData.firstWhere(
+        (data) {
+          return data.$1 == a.ayahIndex;
+        },
+        orElse: () {
+          throw "Unexpected unable to find the index for given ayahIdx: ${a.ayahIndex}";
+        },
+      );
+
+      String text = a.text;
+
+      int startSearchAt = 0;
+      if (_lastAyahIdx == a.ayahIndex) {
+        // start search in the full ayah text after the
+        // last rendered word
+        startSearchAt = _lastRenderedWordIdx;
+      }
+      _lastAyahIdx = a.ayahIndex;
+
+      List<String> words = text.split('\u200c'); // zwj
+      int i = getFirstWordIndex(fullAyahText, text, startSearchAt);
+
+      int lastWordInLineIndex = words.length - 1;
+      if (words.last.isEmpty) {
+        lastWordInLineIndex -= 1;
+      }
+
+      for (final (idx, w) in words.indexed) {
+        if (w.isEmpty) {
+          i++;
+          continue;
+        }
+
+        int wordIdx = i;
+        final tapHandler = TapAndLongPressGestureRecognizer(
+          onTap: () => widget.onAyahTapped(a.ayahIndex, wordIdx, false),
+          onLongPress: () => widget.onAyahTapped(a.ayahIndex, wordIdx, true),
+        );
+
+        TextStyle? style;
+
+        if (w.contains("\u06dd")) {
+          if (isIndoPk) {
+            final kind = isPortion(a.ayahIndex);
+            if (kind != PortionKind.none) {
+              glyphForPortionKind(kind);
+              spans.add(
+                TextSpan(
+                  text: glyphForPortionKind(kind),
+                  style: TextStyle(
+                    backgroundColor:
+                        (darkMode
+                            ? Colors.lightGreen.withAlpha(180)
+                            : Colors.lightGreen),
+                  ),
+                ),
+              );
+            }
+          }
+
+          final ruku = isIndoPk ? getRukuData(a.ayahIndex) : null;
+          final hasRukuMarker = ruku != null;
+          spans.add(
+            TextSpan(
+              text: hasRukuMarker ? " $w" : w,
+              recognizer:
+                  hasRukuMarker
+                      ? (TapGestureRecognizer()
+                        ..onTap = () => _onRukuTapped(a.ayahIndex))
+                      : null,
+              style: TextStyle(
+                inherit: true,
+                color: themeData.textTheme.bodyMedium?.color,
+                backgroundColor:
+                    hasRukuMarker
+                        ? (darkMode
+                            ? Colors.amber.shade700.withAlpha(125)
+                            : Colors.amber.shade100)
+                        : null,
+              ),
+            ),
+          );
+          i++;
+          continue;
+        }
+
+        if (ayahInDb != null) {
+          if (ayahInDb.markedWords.contains(wordIdx)) {
+            style = _markedWordStyle(darkMode);
+          } else if (isMutashabihaAyat) {
+            style = _markedMutAyahBGStyle(darkMode);
+          } else {
+            style = _markedAyahBGStyle(darkMode);
+          }
+        } else if (isMutashabihaAyat) {
+          style = _mutStyle(darkMode);
+        }
+
+        if (widget.ayahsToHighlight?.contains(a.ayahIndex) ?? false) {
+          if (style != null) {
+            style = style.merge(_highlightStyle(darkMode));
+          } else {
+            style = _highlightStyle(darkMode);
+          }
+        }
+
+        // word
+        spans.add(TextSpan(recognizer: tapHandler, text: w, style: style));
+        // space
+        if (reflowMode || idx != lastWordInLineIndex) {
+          spans.add(TextSpan(text: ' ', style: style));
+        }
+
+        i++;
+      }
+
+      _lastRenderedWordIdx = i;
+    }
+    return spans;
+  }
+
+  TextStyle _getQuranTextStyle(double fontSize, {double wordSpacing = 1.0}) {
+    return TextStyle(
+      color: Theme.of(context).textTheme.bodyMedium?.color,
+      fontFamily: getQuranFont(),
+      fontSize: fontSize,
+      letterSpacing: 0,
+      wordSpacing: wordSpacing,
+    );
+  }
+
+  double _getWordSpacing(
+    int lineIdx,
+    List<TextSpan> spans,
+    double width,
+    TextStyle style,
+    Mushaf mushaf,
+  ) {
+    final textPainter = TextPainter(
+      text: TextSpan(children: spans, style: style),
+      textDirection: TextDirection.rtl,
+      maxLines: 1,
+    );
+    textPainter.layout();
+    var diffW = (min(width, 700) - textPainter.width);
+    textPainter.dispose();
+
+    if (diffW > 10) {
+      if (isSurahLastLine(widget.pageIndex, lineIdx, mushaf)) {
+        return 2;
+      }
+      int spaces = 0;
+      for (final s in spans) {
+        if (s.text == ' ') spaces++;
+      }
+      return (spaces > 0 ? diffW / (spaces) : 1).roundToDouble();
+    } else {
+      diffW = diffW.abs();
+      if (diffW < 10) {
+        return 2;
+      } else if (diffW < 20) {
+        return 1;
+      } else {
+        return 0;
+      }
+    }
+  }
+
+  Widget _buildLine(
+    Line line,
+    int lineIdx,
+    List<(int, int, int, Ayat?, bool, String)> ayahData,
+    double fontSize,
+    double width,
+    TextStyle style,
+    ThemeData themeData,
+    Mushaf mushaf,
+  ) {
+    final spans = _buildLineSpans(
+      line,
+      lineIdx,
+      ayahData,
+      themeData,
+      reflowMode: false,
+    );
+    // dont try to space first two pages
+    int firstTwo = isIndoPak(Settings.instance.mushaf) ? 3 : 2;
+    final wordSpacing =
+        widget.pageNumber < firstTwo
+            ? 1.0
+            : _getWordSpacing(lineIdx, spans, width, style, mushaf);
+
+    return Text.rich(
+      TextSpan(children: spans),
+      textDirection: TextDirection.rtl,
+      softWrap: false,
+      maxLines: 1,
+      // min(26, (rowHeight / 1.8).floorToDouble()),
+      style: style.copyWith(wordSpacing: wordSpacing),
+    );
+  }
+
+  int _getLastLineAyah() {
+    for (final line in widget._pageLines.reversed) {
+      for (final a in line.lineAyahs) {
+        if (a.ayahIndex >= 0) {
+          return a.ayahIndex;
+        }
+      }
+    }
+    throw "Did not find any ayahs!!";
+  }
+
+  Widget _pageTopBorder(double height) {
+    final fontSize = Theme.of(context).textTheme.bodySmall?.fontSize;
+    return SizedBox(
+      height: height,
+      child: Row(
+        children: [
+          const SizedBox(width: 4),
+          Text(
+            surahDataForIdx(
+              surahForAyah(_getLastLineAyah()),
+              arabic: true,
+            ).name,
+            style: TextStyle(
+              fontFamily: getQuranFont(),
+              letterSpacing: 0,
+              fontSize: fontSize,
+            ),
+          ),
+          Expanded(
+            child:
+                widget.isBookmarked()
+                    ? const Icon(
+                      Icons.bookmark_added,
+                      size: 24,
+                      color: Colors.orange,
+                    )
+                    : Container(),
+          ),
+          InkWell(
+            onTap: widget.onToggleBookmark,
+            child: Text(
+              (widget.pageNumber + 1).toString(),
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: fontSize),
+            ),
+          ),
+          const Spacer(),
+          Text(
+            getParaNameForIndex(
+              paraForPage(widget.pageIndex, Settings.instance.mushaf),
+            ),
+            style: TextStyle(
+              fontFamily: getQuranFont(),
+              letterSpacing: 0,
+              fontSize: fontSize,
+            ),
+          ),
+          const SizedBox(width: 4),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildSurahHeaddress(int lineIdx, Line line, double rowHeight) {
+    List<Widget> widgets = [];
+    final style = TextStyle(
+      color: Theme.of(context).textTheme.bodyMedium?.color,
+      fontFamily: getQuranFont(),
+      fontSize: Theme.of(context).textTheme.titleLarge?.fontSize,
+      letterSpacing: 0.0,
+      wordSpacing: 0,
+    );
+    final isIndoPk = isIndoPak(Settings.instance.mushaf);
+    if (line.lineAyahs.first.ayahIndex == -999) {
+      widgets.add(_getBism(style, rowHeight));
+    } else {
+      bool drawBismillah =
+          isIndoPk &&
+          lineIdx + 1 < widget._pageLines.length &&
+          widget._pageLines[lineIdx + 1].lineAyahs.first.ayahIndex >= 0;
+      widgets.add(
+        _getSurahHeaddress(
+          -(line.lineAyahs.first.ayahIndex + 1),
+          style,
+          rowHeight,
+          includeBismillah: drawBismillah,
+        ),
+      );
+    }
+    return widgets;
+  }
+
+  List<Widget> _reflowModeText(
+    double rowHeight,
+    List<(int, int, int, Ayat?, bool, String)> ayahData,
+    ThemeData themeData,
+  ) {
+    List<Widget> widgets = [];
+    List<TextSpan> spans = [];
+    for (final (lineIdx, line) in widget._pageLines.indexed) {
+      if (line.lineAyahs.first.ayahIndex < 0) {
+        if (spans.isNotEmpty) {
+          widgets.add(
+            Text.rich(
+              TextSpan(children: spans),
+              textDirection: TextDirection.rtl,
+              textAlign: TextAlign.center,
+              softWrap: true,
+              style: _getQuranTextStyle(Settings.instance.fontSize.toDouble()),
+            ),
+          );
+          spans = [];
+        }
+
+        widgets.addAll(_buildSurahHeaddress(lineIdx, line, rowHeight));
+        continue;
+      }
+
+      spans.addAll(
+        _buildLineSpans(line, lineIdx, ayahData, themeData, reflowMode: true),
+      );
+    }
+    if (spans.isNotEmpty) {
+      widgets.add(
+        Text.rich(
+          TextSpan(children: spans),
+          textDirection: TextDirection.rtl,
+          textAlign: TextAlign.center,
+          softWrap: true,
+          style: _getQuranTextStyle(Settings.instance.fontSize.toDouble()),
+        ),
+      );
+      spans = [];
+    }
+    return widgets;
+  }
+
+  static double _textFontSize() {
+    // print("_textFontSize: ${Settings.instance.fixedLayoutFontSize}");
+    return Settings.instance.fixedLayoutFontSize;
+  }
+
+  List<Widget> _pageLines(double rowHeight, double rowWidth) {
+    int lastAyah = -1;
+    List<(int, int, int, Ayat?, bool, String)> ayahData = [];
+    ayahData.length = 0;
+    final colorMutashabihat = Settings.instance.colorMutashabihat;
+
+    for (final l in widget._pageLines) {
+      if (l.lineAyahs.first.ayahIndex < 0) {
+        continue; // bismillah
+      }
+      for (final a in l.lineAyahs) {
+        if (lastAyah == a.ayahIndex) {
+          continue;
+        } else {
+          lastAyah = a.ayahIndex;
+          final int surahIdx = surahForAyah(a.ayahIndex);
+          final int surahAyahIdx = toSurahAyahOffset(surahIdx, a.ayahIndex);
+          final Ayat? ayahInDb = widget.getAyatInDB(a.ayahIndex);
+          final text = QuranText.instance.ayahText(a.ayahIndex);
+          final bool isMutashabihaAyat =
+              colorMutashabihat
+                  ? widget.isMutashabihaAyat(surahAyahIdx, surahIdx)
+                  : false;
+
+          ayahData.add((
+            a.ayahIndex,
+            surahIdx,
+            surahAyahIdx,
+            ayahInDb,
+            isMutashabihaAyat,
+            text,
+          ));
+        }
+      }
+    }
+
+    final themeData = Theme.of(context);
+
+    // reset cached values before page renders
+    _lastAyahIdx = -1;
+    _lastRenderedWordIdx = -1;
+
+    if (Settings.instance.reflowMode) {
+      return _reflowModeText(rowHeight, ayahData, themeData);
+    }
+
+    List<Widget> widgets = [];
+    const divider = Divider(color: Colors.grey, height: 1);
+    final bigScreen = isBigScreen();
+    final defaultTextStyle = _getQuranTextStyle(_textFontSize());
+
+    final mushaf = Settings.instance.mushaf;
+    final isIndoPk = isIndoPak(mushaf);
+    final fontSize = _textFontSize();
+    final boxFit = bigScreen ? BoxFit.contain : BoxFit.scaleDown;
+    final leftRightBorder = BoxDecoration(
+      border: Border.symmetric(
+        vertical: BorderSide(color: themeData.dividerColor, width: 1),
+      ),
+    );
+
+    for (final (idx, l) in widget._pageLines.indexed) {
+      if (l.lineAyahs.first.ayahIndex < 0) {
+        widgets.addAll(_buildSurahHeaddress(idx, l, rowHeight));
+        continue;
+      }
+
+      // 15 line uthmani is not separated by divider
+      if (isIndoPk) widgets.add(divider);
+      // except first line, as its the top border of page
+      if (!isIndoPk && idx == 0) widgets.add(divider);
+
+      const double padding = 4;
+      widgets.add(
+        Container(
+          height: rowHeight,
+          width: double.infinity,
+          padding: const EdgeInsets.only(left: padding, right: padding),
+          decoration: leftRightBorder,
+          child: FittedBox(
+            fit: boxFit,
+            child: _buildLine(
+              l,
+              idx,
+              ayahData,
+              fontSize,
+              rowWidth - (2 * padding),
+              defaultTextStyle,
+              themeData,
+              mushaf,
+            ),
+          ),
+        ),
+      );
+    }
+    widgets.add(divider);
+
+    return widgets;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final numPageLines = switch (Settings.instance.mushaf) {
+      Mushaf.Indopak16Line => 16,
+      Mushaf.Indopak15Line || Mushaf.Uthmani15Line => 15,
+      Mushaf.Indopak13Line => 13,
+    };
+
+    final double topBorderHeight = 16.0;
+
+    final double height =
+        _availableHeight(context) -
+        ( /*divider between lines(1px)*/ numPageLines +
+            2 + // some extra space
+            /*topborder=*/ topBorderHeight);
+
+    final double rowHeight = max((height / numPageLines), 10.0);
+    final double rowWidth = MediaQuery.sizeOf(context).width;
+    const double padding = 4;
+    return Padding(
+      padding: const EdgeInsets.only(left: padding, right: padding),
+      child: ListView(
+        physics: const ClampingScrollPhysics(),
+        children: [
+          // Top border
+          _pageTopBorder(topBorderHeight),
+          // Divider
+          if (Settings.instance.reflowMode)
+            const Divider(color: Colors.grey, height: 1),
+          // The actual page text
+          ..._pageLines(rowHeight, rowWidth - (2 * padding)),
+        ],
+      ),
+    );
+  }
+}
