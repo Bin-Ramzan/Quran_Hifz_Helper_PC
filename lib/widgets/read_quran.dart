@@ -1,7 +1,8 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart' show LogicalKeyboardKey, rootBundle;
 import 'package:quran_memorization_helper/models/routing.dart';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -112,7 +113,13 @@ double _availableHeight(BuildContext context) {
 
   final dualPage = Settings.instance.temporaryState.dualPage;
 
-  final appBarHeight = dualPage ? 0 : kToolbarHeight;
+  final isDesktop = switch (defaultTargetPlatform) {
+    TargetPlatform.linux ||
+    TargetPlatform.macOS ||
+    TargetPlatform.windows => true,
+    _ => false,
+  };
+  final appBarHeight = dualPage && !isDesktop ? 0 : kToolbarHeight;
   final padding = top + bottom + appBarHeight;
 
   // dont go below 200, we will scroll if below
@@ -264,86 +271,97 @@ class _LongPressActionSheetState extends State<LongPressActionSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return PageView.builder(
-      reverse: true,
-      itemCount: QuranText.instance.ayahCount(),
-      controller: _controller,
-      itemBuilder: (context, index) {
-        final int ayah = index;
-        final int s = widget.translation.transLineOffsets[ayah];
-        final int e = widget.translation.transLineOffsets[ayah + 1];
-        String translation = utf8.decode(
-          widget.translation.transUtf8.asUint8List(s, e - s),
-        );
-        String metadata = surahAyahText(ayah);
-        final int surahIdx = surahForAyah(ayah);
-        final int surahAyahIdx = toSurahAyahOffset(surahIdx, ayah);
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape):
+            () => Navigator.of(context).maybePop(),
+      },
+      child: Focus(
+        autofocus: true,
+        child: PageView.builder(
+          reverse: true,
+          itemCount: QuranText.instance.ayahCount(),
+          controller: _controller,
+          itemBuilder: (context, index) {
+            final int ayah = index;
+            final int s = widget.translation.transLineOffsets[ayah];
+            final int e = widget.translation.transLineOffsets[ayah + 1];
+            String translation = utf8.decode(
+              widget.translation.transUtf8.asUint8List(s, e - s),
+            );
+            String metadata = surahAyahText(ayah);
+            final int surahIdx = surahForAyah(ayah);
+            final int surahAyahIdx = toSurahAyahOffset(surahIdx, ayah);
 
-        // if mutashabiha is null, we always show translation
-        bool dontShowMutashabih =
-            (widget.mutashabihaList == null) ||
-            // else if user has swiped, then we expand
-            (widget.mutashabihaList != null && widget.tappedAyahIdx != ayah);
-        final translationWidget = TranslationTile(
-          translation,
-          widget.translation.isUrdu,
-          ayahIndex: ayah,
-          hasNoMutashabihat: dontShowMutashabih,
-        );
+            // if mutashabiha is null, we always show translation
+            bool dontShowMutashabih =
+                (widget.mutashabihaList == null) ||
+                // else if user has swiped, then we expand
+                (widget.mutashabihaList != null &&
+                    widget.tappedAyahIdx != ayah);
+            final translationWidget = TranslationTile(
+              translation,
+              widget.translation.isUrdu,
+              ayahIndex: ayah,
+              hasNoMutashabihat: dontShowMutashabih,
+            );
 
-        final openOnQuranCom = TextButton.icon(
-          onPressed: () {
-            launchUrl(
-              Uri.parse(
-                "https://quran.com/${surahIdx + 1}:${surahAyahIdx + 1}",
-              ),
+            final openOnQuranCom = TextButton.icon(
+              onPressed: () {
+                launchUrl(
+                  Uri.parse(
+                    "https://quran.com/${surahIdx + 1}:${surahAyahIdx + 1}",
+                  ),
+                );
+              },
+              icon: const Icon(Icons.open_in_new),
+              label: Text("$metadata on Quran.com"),
+            );
+
+            const animDuration = Duration(milliseconds: 150);
+            const curve = Curves.easeIn;
+            final nextPageButton = FilledButton(
+              child: const Icon(Icons.arrow_back),
+              onPressed: () {
+                _controller.nextPage(duration: animDuration, curve: curve);
+              },
+            );
+            final prevPageButton = FilledButton(
+              child: const Icon(Icons.arrow_forward),
+              onPressed: () {
+                _controller.previousPage(duration: animDuration, curve: curve);
+              },
+            );
+
+            List<Widget> listChildren;
+
+            if (widget.tappedAyahIdx == ayah &&
+                widget.mutashabihaList != null) {
+              listChildren = [
+                openOnQuranCom,
+                translationWidget,
+                const Divider(),
+                widget.mutashabihaList!,
+              ];
+            } else {
+              listChildren = [openOnQuranCom, translationWidget];
+            }
+
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Expanded(child: ListView(children: listChildren)),
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Row(
+                    children: [nextPageButton, const Spacer(), prevPageButton],
+                  ),
+                ),
+              ],
             );
           },
-          icon: const Icon(Icons.open_in_new),
-          label: Text("$metadata on Quran.com"),
-        );
-
-        const animDuration = Duration(milliseconds: 150);
-        const curve = Curves.easeIn;
-        final nextPageButton = FilledButton(
-          child: const Icon(Icons.arrow_back),
-          onPressed: () {
-            _controller.nextPage(duration: animDuration, curve: curve);
-          },
-        );
-        final prevPageButton = FilledButton(
-          child: const Icon(Icons.arrow_forward),
-          onPressed: () {
-            _controller.previousPage(duration: animDuration, curve: curve);
-          },
-        );
-
-        List<Widget> listChildren;
-
-        if (widget.tappedAyahIdx == ayah && widget.mutashabihaList != null) {
-          listChildren = [
-            openOnQuranCom,
-            translationWidget,
-            const Divider(),
-            widget.mutashabihaList!,
-          ];
-        } else {
-          listChildren = [openOnQuranCom, translationWidget];
-        }
-
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Expanded(child: ListView(children: listChildren)),
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Row(
-                children: [nextPageButton, const Spacer(), prevPageButton],
-              ),
-            ),
-          ],
-        );
-      },
+        ),
+      ),
     );
   }
 }
@@ -405,7 +423,7 @@ class _ReadQuranWidget extends State<ReadQuranWidget>
     //   });
     // });
     super.initState();
-    WakelockPlus.enable(); // disable auto screen turn off
+    if (_supportsWakelock) WakelockPlus.enable();
   }
 
   /* Test code to scroll through all pages */
@@ -434,8 +452,12 @@ class _ReadQuranWidget extends State<ReadQuranWidget>
     widget.model.removeListener(onModelChanged);
     Settings.instance.removeListener(clearCachedTranslation);
     super.dispose();
-    WakelockPlus.disable();
+    if (_supportsWakelock) WakelockPlus.disable();
   }
+
+  bool get _supportsWakelock =>
+      defaultTargetPlatform == TargetPlatform.android ||
+      defaultTargetPlatform == TargetPlatform.iOS;
 
   void clearCachedTranslation() {
     // rebuild as reflow mode or other setting might have changed
@@ -1453,37 +1475,36 @@ class _PageWidgetState extends State<PageWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final numPageLines = switch (Settings.instance.mushaf) {
-      Mushaf.Indopak16Line => 16,
-      Mushaf.Indopak15Line || Mushaf.Uthmani15Line => 15,
-      Mushaf.Indopak13Line => 13,
-    };
+    final numPageLines = widget._pageLines.length;
 
     final double topBorderHeight = 16.0;
-
-    final double height =
-        _availableHeight(context) -
-        ( /*divider between lines(1px)*/ numPageLines +
-            2 + // some extra space
-            /*topborder=*/ topBorderHeight);
-
-    final double rowHeight = max((height / numPageLines), 10.0);
-    final double rowWidth = MediaQuery.sizeOf(context).width;
     const double padding = 4;
-    return Padding(
-      padding: const EdgeInsets.only(left: padding, right: padding),
-      child: ListView(
-        physics: const ClampingScrollPhysics(),
-        children: [
-          // Top border
-          _pageTopBorder(topBorderHeight),
-          // Divider
-          if (Settings.instance.reflowMode)
-            const Divider(color: Colors.grey, height: 1),
-          // The actual page text
-          ..._pageLines(rowHeight, rowWidth - (2 * padding)),
-        ],
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final double height =
+            constraints.maxHeight -
+            ( /*divider between lines(1px)*/ numPageLines +
+                2 + // some extra space
+                /*topborder=*/ topBorderHeight);
+        final double rowHeight = max((height / numPageLines), 10.0);
+        final double rowWidth = MediaQuery.sizeOf(context).width;
+
+        return Padding(
+          padding: const EdgeInsets.only(left: padding, right: padding),
+          child: ListView(
+            physics: const ClampingScrollPhysics(),
+            children: [
+              // Top border
+              _pageTopBorder(topBorderHeight),
+              // Divider
+              if (Settings.instance.reflowMode)
+                const Divider(color: Colors.grey, height: 1),
+              // The actual page text
+              ..._pageLines(rowHeight, rowWidth - (2 * padding)),
+            ],
+          ),
+        );
+      },
     );
   }
 }

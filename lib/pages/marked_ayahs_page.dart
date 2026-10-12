@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:quran_memorization_helper/models/ayah_selection_model.dart';
 import 'package:quran_memorization_helper/models/ayat.dart';
 import 'package:quran_memorization_helper/models/routing.dart';
@@ -183,42 +184,58 @@ class _MarkedAyahsPageState extends State<MarkedAyahsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: _multipleSelectMode == false,
-      onPopInvokedWithResult: (didPop, result) async {
-        if (_multipleSelectMode) {
-          _onExitMultiSelectMode();
-        }
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): () {
+          if (_multipleSelectMode) {
+            _onExitMultiSelectMode();
+          } else {
+            Navigator.of(context).maybePop();
+          }
+        },
       },
-      child: Scaffold(
-        appBar: TitleOnlyAppBar("Marked ayahs for ${paraText()} $_currentPara"),
-        bottomNavigationBar: BottomAppBar(
-          padding: EdgeInsets.zero,
-          height: kToolbarHeight,
-          child: buildAppbar(),
-        ),
-        body: FutureBuilder<void>(
-          future: _loadDataFuture,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState != ConnectionState.done) {
-              return const SizedBox.shrink();
+      child: Focus(
+        autofocus: true,
+        child: PopScope(
+          canPop: _multipleSelectMode == false,
+          onPopInvokedWithResult: (didPop, result) async {
+            if (_multipleSelectMode) {
+              _onExitMultiSelectMode();
             }
-            return SafeArea(
-              child: ListView.separated(
-                separatorBuilder:
-                    (BuildContext context, int index) => const Divider(
-                      indent: 8,
-                      endIndent: 8,
-                      color: Colors.grey,
-                      height: 2,
-                    ),
-                itemCount: ayahAndMutashabihat.length,
-                itemBuilder: (context, index) {
-                  return _listItemForIndex(index);
-                },
-              ),
-            );
           },
+          child: Scaffold(
+            appBar: TitleOnlyAppBar(
+              "Marked ayahs for ${paraText()} $_currentPara",
+            ),
+            bottomNavigationBar: BottomAppBar(
+              padding: EdgeInsets.zero,
+              height: kToolbarHeight,
+              child: buildAppbar(),
+            ),
+            body: FutureBuilder<void>(
+              future: _loadDataFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const SizedBox.shrink();
+                }
+                return SafeArea(
+                  child: ListView.separated(
+                    separatorBuilder:
+                        (BuildContext context, int index) => const Divider(
+                          indent: 8,
+                          endIndent: 8,
+                          color: Colors.grey,
+                          height: 2,
+                        ),
+                    itemCount: ayahAndMutashabihat.length,
+                    itemBuilder: (context, index) {
+                      return _listItemForIndex(index);
+                    },
+                  ),
+                );
+              },
+            ),
+          ),
         ),
       ),
     );

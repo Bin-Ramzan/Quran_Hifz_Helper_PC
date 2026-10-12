@@ -40,7 +40,7 @@ build_windows.bat
 
 The build output, including `quranmemhelp.exe` and its required runtime files, is created in `build\windows\x64\runner\Release\`. Run the executable from that folder; a Flutter Windows app cannot run by copying out only the `.exe`.
 
-To publish a downloadable Windows release, push a tag matching the app version in `pubspec.yaml` (for example, `v1.8.2`). GitHub Actions builds the installer and portable ZIP and attaches both to a GitHub Release.
+To publish a downloadable Windows release, push a tag matching the app version in `pubspec.yaml` (for example, `v1.8.3`). GitHub Actions builds the installer and portable ZIP and attaches both to a GitHub Release.
 
 ## Mobile development
 

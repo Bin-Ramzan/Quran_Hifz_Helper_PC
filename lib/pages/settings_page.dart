@@ -9,7 +9,7 @@ import 'package:quran_memorization_helper/models/settings.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:quran_memorization_helper/utils/utils.dart';
 
-const String appVersion = "1.8.2";
+const String appVersion = "1.8.3";
 const String appTitle = "Quran Revision Companion";
 
 class _ChangeTranslationDialog extends StatefulWidget {
@@ -493,25 +493,6 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _email() {
-    return ListTile(
-      leading: const Icon(Icons.email),
-      title: const Text("Email support"),
-      subtitle: const Text("Reach out to us at waqar.17a@gmail.com"),
-      onTap: () async {
-        final email = Uri.parse("mailto:waqar.17a@gmail.com");
-        if (await canLaunchUrl(email)) {
-          await launchUrl(email, mode: LaunchMode.externalApplication);
-        } else {
-          await Clipboard.setData(ClipboardData(text: "waqar.17a@gmail.com"));
-          if (mounted) {
-            showSnackBarMessage(context, "Copied to clipboard");
-          }
-        }
-      },
-    );
-  }
-
   Widget _licenses() {
     return ListTile(
       leading: const Icon(Icons.policy),
@@ -531,28 +512,36 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text("Settings")),
-      body: ListView(
-        children: [
-          _createThemeModeTile(),
-          _createMushafSelectionTile(),
-          _createReflowModeTile(),
-          _createFontSizeTile(),
-          _tapToShowTranslationTile(),
-          _mutashabihaColoringTile(),
-          _customTranslationTile(),
-          _createBackupWidget(),
-          _restoreBackupWidget(),
-          const Divider(),
-          _reportAnIssue(),
-          _originalAppCredit(),
-          _email(),
-          const Divider(),
-          _translationInfo(),
-          _licenses(),
-          _version(),
-        ],
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape):
+            () => Navigator.of(context).maybePop(),
+      },
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          appBar: AppBar(title: const Text("Settings")),
+          body: ListView(
+            children: [
+              _createThemeModeTile(),
+              _createMushafSelectionTile(),
+              _createReflowModeTile(),
+              _createFontSizeTile(),
+              _tapToShowTranslationTile(),
+              _mutashabihaColoringTile(),
+              _customTranslationTile(),
+              _createBackupWidget(),
+              _restoreBackupWidget(),
+              const Divider(),
+              _reportAnIssue(),
+              _originalAppCredit(),
+              const Divider(),
+              _translationInfo(),
+              _licenses(),
+              _version(),
+            ],
+          ),
+        ),
       ),
     );
   }
